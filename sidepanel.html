@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LeetCode Mentor</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+  <script src="lib/marked.js"></script>
+  <script src="lib/purify.js"></script>
+  <script type="module" src="sidepanel.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="icons/icon32.png" alt="" /> LeetCode Mentor</div>
+    <div class="top-actions">
+      <button id="btn-clear" class="icon" title="Clear this problem's chat">🗑</button>
+      <button id="btn-settings" class="icon" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <!-- Problem card -->
+  <section id="problem" class="card">
+    <div id="problem-empty" class="muted">
+      Open any problem on <b>leetcode.com/problems/…</b> and it will show up here.
+    </div>
+    <div id="problem-info" hidden>
+      <div class="p-title"><span id="p-title"></span> <span id="p-diff" class="diff"></span></div>
+      <div id="p-tags" class="tags"></div>
+    </div>
+  </section>
+
+  <!-- Actions -->
+  <section id="actions" class="actions">
+    <button data-mode="understand">🧠 Understand</button>
+    <button data-mode="hint" id="btn-hint">💡 Hint 1</button>
+    <button data-mode="logic">🛠 Build logic</button>
+    <button data-mode="topics">📚 Topics &amp; traps</button>
+    <button data-mode="code">💻 Write code</button>
+    <button data-mode="review">🔍 Review my code</button>
+  </section>
+  <div class="lang-row">
+    <label>Language
+      <select id="lang"></select>
+    </label>
+    <span id="lang-note" class="muted small"></span>
+  </div>
+
+  <!-- Chat -->
+  <main id="chat" class="chat">
+    <div id="welcome" class="welcome">
+      <h3>How to use</h3>
+      <ol>
+        <li><b>Understand</b>: the problem in plain words, with no spoilers.</li>
+        <li><b>Hint</b>: one nudge at a time (up to 4). Try it yourself in between.</li>
+        <li><b>Build logic</b>: brute force → key insight → optimized, with the <i>why</i> behind every step.</li>
+        <li><b>Topics &amp; traps</b>: every concept from scratch, plus common interview mistakes.</li>
+        <li><b>Write code</b>: a commented solution with a line-by-line <i>why</i>.</li>
+        <li><b>Review my code</b>: reads your editor, finds bugs and shows a failing input.</li>
+      </ol>
+      <p class="muted">Ask anything below, e.g. <i>"why do we cast to long here?"</i></p>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <textarea id="input" rows="2" placeholder="Ask a follow-up… (Enter to send, Shift+Enter for new line)"></textarea>
+    <button id="btn-send" class="primary">Send</button>
+    <button id="btn-stop" class="danger" hidden>Stop</button>
+  </footer>
+
+  <!-- Settings -->
+  <div id="settings" class="overlay" hidden>
+    <div class="sheet">
+      <h2>Settings</h2>
+      <label>Gemini API key
+        <input id="s-key" type="password" placeholder="Paste your free key" autocomplete="off" />
+      </label>
+      <p class="muted small">Free, no credit card: <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a> → “Create API key”. It's stored only in this browser.</p>
+
+      <label>Model
+        <div class="row">
+          <select id="s-model"></select>
+          <button id="s-load" type="button">Load models</button>
+        </div>
+      </label>
+      <p class="muted small">“Flash” models give the best explanations on the free tier. If you hit rate limits often, pick a “flash-lite” model.</p>
+
+      <label>Explanation level
+        <select id="s-level">
+          <option value="beginner">Beginner: explain everything from zero</option>
+          <option value="intermediate">Intermediate: clear but skip basics</option>
+          <option value="interview">Interview prep: crisp, patterns and traps</option>
+        </select>
+      </label>
+
+      <label>Default language
+        <select id="s-lang"></select>
+      </label>
+
+      <p class="muted small">Privacy: on Gemini's free tier, Google may use prompts to improve its models. Only the problem text, your questions, and (when you click Review) your code are sent.</p>
+      <div id="s-status" class="small"></div>
+      <div class="row end">
+        <button id="s-cancel" type="button">Close</button>
+        <button id="s-save" type="button" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
