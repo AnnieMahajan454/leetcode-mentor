@@ -1,5 +1,5 @@
-import { slugFromUrl, getActiveTab, fetchProblem, readEditor, problemHtmlToText } from "./leetcode.js";
-import { streamChat, listModels, pickDefaultModel } from "./gemini.js";
+import { slugFromUrl, getActiveTab, fetchProblem, readEditor, problemHtmlToText, runTool, describeToolResult } from "./leetcode.js";
+import { streamChat, listModels, pickDefaultModel, SUBMISSION_TOOLS } from "./gemini.js";
 import { LANGS, MODES, systemPrompt, starterSnippet } from "./prompts.js";
 
 // Opening sidepanel.html as a normal page (outside the extension) runs a demo with sample data.
@@ -25,7 +25,7 @@ const store = {
 };
 
 const state = {
-  settings: { apiKey: "", model: "", level: "beginner", lang: "auto" },
+  settings: { apiKey: "", model: "", level: "beginner", lang: "auto", useSubmissions: true },
   tabId: null, slug: null, problem: null, problemText: "",
   history: [], hintLevel: 1, editorLang: null, controller: null, loading: false,
 };
@@ -56,10 +56,22 @@ function addBubble(role, text) {
   return el;
 }
 
+// Small "🔧 ..." line above an answer, one per tool call, so the agent step is visible.
+function addToolChip(bubble, text, kind) {
+  const chip = document.createElement("div");
+  chip.className = `tool-chip ${kind || ""}`;
+  chip.textContent = `🔧 ${text}`;
+  bubble.before(chip);
+  return chip;
+}
+
 function renderHistory() {
-  $("chat").querySelectorAll(".msg").forEach((m) => m.remove());
+  $("chat").querySelectorAll(".msg, .tool-chip").forEach((m) => m.remove());
   $("welcome").hidden = state.history.length > 0;
-  for (const m of state.history) addBubble(m.role, m.role === "user" ? m.label || m.text : m.text);
+  for (const m of state.history) {
+    const el = addBubble(m.role, m.role === "user" ? m.label || m.text : m.text);
+    for (const t of m.tools || []) addToolChip(el, t.text, t.kind);
+  }
   const last = $("chat").lastElementChild;
   if (state.history.length && last) last.scrollIntoView({ block: "start" });
 }
@@ -166,7 +178,23 @@ async function saveChat() {
 }
 
 // ---------------- talking to Gemini ----------------
-async function send(text, label) {
+const toolsAllowed = () => !DEMO && state.settings.useSubmissions !== false;
+
+// Runs one tool the model asked for, in the LeetCode tab, and shows its chip.
+function makeToolRunner(bubble, chips) {
+  return async (name, args) => {
+    const chip = addToolChip(bubble, "Checking your LeetCode submissions…", "pending");
+    const result = await runTool(state.tabId, state.slug, name, args);
+    const entry = { text: describeToolResult(name, result), kind: result.ok ? "" : "warn" };
+    chip.textContent = `🔧 ${entry.text}`;
+    chip.className = `tool-chip ${entry.kind}`;
+    chips.push(entry);
+    return result;
+  };
+}
+
+// useTools: let the model look up the user's past submissions first (agent step).
+async function send(text, label, useTools = false) {
   if (!state.problem) return showError("Open a LeetCode problem first.");
   if (!state.settings.apiKey) { openSettings(); return; }
   if (state.controller) return;
@@ -177,6 +205,8 @@ async function send(text, label) {
   bubble.classList.add("streaming");
   setBusy(true);
   state.controller = new AbortController();
+  const withTools = useTools && toolsAllowed();
+  const chips = [];
 
   let latest = "", queued = false;
   const onText = (t) => {
@@ -195,21 +225,24 @@ async function send(text, label) {
     const full = await streamChat({
       apiKey: state.settings.apiKey,
       model: state.settings.model || "gemini-2.5-flash",
-      system: systemPrompt(state.problem, state.problemText, state.settings.level),
+      system: systemPrompt(state.problem, state.problemText, state.settings.level, withTools),
       history: state.history.slice(-MAX_HISTORY).map(({ role, text }) => ({ role, text })),
       onText,
       signal: state.controller.signal,
+      tools: withTools ? SUBMISSION_TOOLS : null,
+      runTool: withTools ? makeToolRunner(bubble, chips) : null,
     });
     renderMarkdown(bubble, full);
-    state.history.push({ role: "model", text: full });
+    state.history.push({ role: "model", text: full, tools: chips });
     await saveChat();
   } catch (e) {
     if (e.name === "AbortError" && latest) {
       const partial = latest + "\n\n> ⏹ *Stopped.*";
       renderMarkdown(bubble, partial);
-      state.history.push({ role: "model", text: partial });
+      state.history.push({ role: "model", text: partial, tools: chips });
       await saveChat();
     } else {
+      $("chat").querySelectorAll(".tool-chip.pending").forEach((c) => c.remove());
       bubble.remove();
       state.history.pop(); // drop the unanswered question so a retry starts clean
       if (e.name !== "AbortError") showError(e.message || String(e));
@@ -232,7 +265,7 @@ async function runMode(mode) {
       const n = state.hintLevel;
       state.hintLevel++;
       updateHintButton();
-      await send(MODES.hint.prompt(n), MODES.hint.label(n));
+      await send(MODES.hint.prompt(n), MODES.hint.label(n), true);
       // Give the hint back if the request failed.
       if (state.history.at(-1)?.role !== "model") { state.hintLevel = n; updateHintButton(); }
       return saveChat();
@@ -248,7 +281,7 @@ async function runMode(mode) {
       }
       if (LANGS[ed.lang]) state.editorLang = ed.lang;
       updateLangNote();
-      return send(MODES.review.prompt(langName(ed.lang), ed.code), MODES.review.label);
+      return send(MODES.review.prompt(langName(ed.lang), ed.code), MODES.review.label, true);
     }
   }
 }
@@ -275,6 +308,7 @@ function openSettings() {
   $("s-key").value = state.settings.apiKey;
   $("s-level").value = state.settings.level;
   $("s-lang").value = state.settings.lang;
+  $("s-subs").checked = state.settings.useSubmissions !== false;
   setModelOptions([], state.settings.model || "gemini-2.5-flash");
   setStatus(state.settings.apiKey ? "" : "Add your free Gemini API key to get started.");
   $("settings").hidden = false;
@@ -301,7 +335,13 @@ async function saveSettings() {
   if (key && key !== state.settings.apiKey && $("s-model").options.length <= 1) {
     if (!(await loadModelList())) return;
   }
-  state.settings = { apiKey: key, model: $("s-model").value, level: $("s-level").value, lang: $("s-lang").value };
+  state.settings = {
+    apiKey: key,
+    model: $("s-model").value,
+    level: $("s-level").value,
+    lang: $("s-lang").value,
+    useSubmissions: $("s-subs").checked,
+  };
   await store.set({ settings: state.settings });
   $("settings").hidden = true;
 }
@@ -313,7 +353,7 @@ function bind() {
     const t = $("input").value.trim();
     if (!t) return;
     $("input").value = "";
-    send(t);
+    send(t, undefined, true);
   };
   $("input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("btn-send").click(); }

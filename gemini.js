@@ -1,5 +1,49 @@
 // Minimal Gemini client (free tier key from https://aistudio.google.com/apikey).
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
+const MAX_TOOL_ROUNDS = 3; // the agent may call tools at most 3 times before it must answer
+
+// Tools the model may call. The side panel runs them in the LeetCode tab (runTool in leetcode.js).
+export const SUBMISSION_TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: "get_my_submissions",
+        description:
+          "List the student's most recent LeetCode submissions for a problem, newest first: status (Accepted, Wrong Answer, " +
+          "Time Limit Exceeded, ...), language, runtime, memory and when it was submitted. Call this before a hint, a code " +
+          "review or feedback to see what the student has already tried.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            title_slug: { type: "STRING", description: "Problem slug such as 'two-sum'. Leave out for the current problem." },
+            limit: { type: "INTEGER", description: "How many submissions to return, 1-20. Default 5." },
+          },
+        },
+      },
+      {
+        name: "get_submission_code",
+        description:
+          "Get one of the student's submissions by id: the code, the judge status, runtime and, for failed attempts, the " +
+          "failing test input, the expected output and the student's output. Use it to see exactly why an attempt failed.",
+        parameters: {
+          type: "OBJECT",
+          properties: { submission_id: { type: "STRING", description: "A submission id returned by get_my_submissions." } },
+          required: ["submission_id"],
+        },
+      },
+      {
+        name: "get_recent_accepted",
+        description:
+          "List problems the student solved recently (accepted submissions), newest first. Use it to link this problem to " +
+          "patterns the student already knows.",
+        parameters: {
+          type: "OBJECT",
+          properties: { limit: { type: "INTEGER", description: "How many problems to return, 1-20. Default 10." } },
+        },
+      },
+    ],
+  },
+];
 
 function friendlyError(status, message) {
   if (status === 429) return "Free-tier rate limit reached. Wait a minute and try again (daily limits reset at midnight Pacific time), or switch to a Flash-Lite model in Settings.";
@@ -7,6 +51,21 @@ function friendlyError(status, message) {
   if (status === 403) return "This API key can't use that model. Pick another model in Settings.";
   if (status === 404) return "That model isn't available any more. Click 'Load models' in Settings and pick a current one.";
   return message || `Gemini request failed (HTTP ${status}).`;
+}
+
+// POST to a model method. Throws a readable Error on HTTP errors.
+async function callModel({ apiKey, model, method, body, signal }) {
+  const res = await fetch(`${BASE}/models/${encodeURIComponent(model)}:${method}`, {
+    method: "POST",
+    signal,
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(friendlyError(res.status, json.error && json.error.message));
+  }
+  return res;
 }
 
 export async function listModels(apiKey) {
@@ -30,32 +89,13 @@ export function pickDefaultModel(names) {
   return flash[0] || lite[0] || names[0] || "gemini-2.5-flash";
 }
 
-/**
- * Streams a reply. history: [{role: "user"|"model", text}]
- * onText(fullTextSoFar) is called as chunks arrive. Returns the full text.
- */
-export async function streamChat({ apiKey, model, system, history, onText, signal }) {
-  const res = await fetch(`${BASE}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
-    method: "POST",
-    signal,
-    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
-      generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
-    }),
-  });
-
-  if (!res.ok) {
-    const json = await res.json().catch(() => ({}));
-    throw new Error(friendlyError(res.status, json.error && json.error.message));
-  }
-
+// One streamed model turn. Text is passed to onText as it arrives; function calls are collected.
+async function streamTurn({ apiKey, model, body, onText, signal }) {
+  const res = await callModel({ apiKey, model, method: "streamGenerateContent?alt=sse", body, signal });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-  let full = "";
-  let finish = "";
+  const turn = { text: "", parts: [], calls: [], finish: "" };
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -69,17 +109,62 @@ export async function streamChat({ apiKey, model, system, history, onText, signa
       try { evt = JSON.parse(line.slice(5)); } catch { continue; }
       const cand = evt.candidates && evt.candidates[0];
       if (!cand) continue;
-      if (cand.finishReason) finish = cand.finishReason;
+      if (cand.finishReason) turn.finish = cand.finishReason;
       for (const p of (cand.content && cand.content.parts) || []) {
-        if (p.text && !p.thought) {
-          full += p.text;
-          onText(full);
+        turn.parts.push(p); // kept as-is (including thought signatures) to send back after tool calls
+        if (p.functionCall) turn.calls.push(p.functionCall);
+        else if (p.text && !p.thought) {
+          turn.text += p.text;
+          onText(turn.text);
         }
       }
     }
   }
-  if (!full && finish === "SAFETY") throw new Error("Gemini blocked this reply. Try rephrasing.");
-  if (finish === "MAX_TOKENS") {
+  return turn;
+}
+
+/**
+ * Streams a reply. history: [{role: "user"|"model", text}]
+ * onText(fullTextSoFar) is called as chunks arrive. Returns the full text.
+ *
+ * Agent loop: when `tools` and `runTool` are given, the model may answer with function calls instead of text.
+ * We run each call with runTool(name, args), send the results back as functionResponse parts and ask again,
+ * up to MAX_TOOL_ROUNDS times. After that tools are switched off so the model must answer.
+ * Without tools, or if the model calls none, this is a single streamed request.
+ */
+export async function streamChat({ apiKey, model, system, history, onText, signal, tools, runTool }) {
+  const contents = history.map((h) => ({ role: h.role, parts: [{ text: h.text }] }));
+  const useTools = !!(tools && runTool);
+
+  for (let round = 0; ; round++) {
+    const canCall = useTools && round < MAX_TOOL_ROUNDS;
+    const body = {
+      systemInstruction: { parts: [{ text: system }] },
+      contents,
+      generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
+    };
+    if (useTools) {
+      body.tools = tools;
+      body.toolConfig = { functionCallingConfig: { mode: canCall ? "AUTO" : "NONE" } };
+    }
+    const turn = await streamTurn({ apiKey, model, body, onText, signal });
+    if (!turn.calls.length || !canCall) return finishReply(turn, onText);
+
+    // Agent step: run every requested tool, then give the results back to the model.
+    contents.push({ role: "model", parts: turn.parts });
+    const responses = [];
+    for (const call of turn.calls) {
+      const response = await runTool(call.name, call.args || {});
+      responses.push({ functionResponse: { ...(call.id && { id: call.id }), name: call.name, response } });
+    }
+    contents.push({ role: "user", parts: responses });
+  }
+}
+
+function finishReply(turn, onText) {
+  let full = turn.text;
+  if (!full && turn.finish === "SAFETY") throw new Error("Gemini blocked this reply. Try rephrasing.");
+  if (turn.finish === "MAX_TOKENS") {
     full += "\n\n> ✂️ *Reply was cut off at the length limit. Ask \"continue\" to get the rest.*";
     onText(full);
   }

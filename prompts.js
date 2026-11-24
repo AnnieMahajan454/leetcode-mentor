@@ -25,9 +25,36 @@ const LEVELS = {
     "The student is preparing for interviews soon. Be crisp and interview-focused, emphasize patterns, trade-offs and traps.",
 };
 
-export function systemPrompt(problem, problemText, level) {
+// ---------- shared ----------
+
+// The problem itself, given to every prompt (Tutor and Practice).
+function problemBlock(problem, problemText) {
   const tags = (problem.topicTags || []).map((t) => t.name).join(", ") || "not provided";
   const lcHints = (problem.hints || []).length ? problem.hints.map((h, i) => `${i + 1}. ${h}`).join("\n") : "none";
+  return `## The problem
+${problem.questionFrontendId ? `#${problem.questionFrontendId} ` : ""}${problem.title}${problem.difficulty ? ` (${problem.difficulty})` : ""}
+LeetCode topic tags: ${tags}
+LeetCode's official hints:
+${lcHints}
+
+Statement:
+"""
+${problemText}
+"""`;
+}
+
+// Added only when the "Use my past submissions" setting is on and the request allows tools.
+const PAST_ATTEMPTS = `## The student's past attempts (tools)
+You can call tools that read the student's own LeetCode submissions: get_my_submissions, get_submission_code and get_recent_accepted.
+- For hints, code reviews and questions about their code: call get_my_submissions first. If a recent attempt failed, call get_submission_code on it to see the failing input.
+- For general concept questions, don't call tools.
+- If what you found changes your answer, open with ONE italic line that says so, e.g. "*Your last 2 attempts failed on an empty array, so this hint focuses on edge cases.*" Then answer.
+- Past attempts never unlock more than the current mode allows. A hint stays a hint.
+- If a tool returns an error or nothing useful, answer normally. Mention a sign-in problem in one short line at most.`;
+
+// ---------- Tutor mode ----------
+
+export function systemPrompt(problem, problemText, level, useTools) {
   return `You are **LeetCode Mentor**, a patient, honest coding teacher helping a student truly understand LeetCode problems.
 
 ## How you teach
@@ -39,17 +66,8 @@ export function systemPrompt(problem, problemText, level) {
 - Formatting: Markdown with ### headings, short paragraphs, bullets, tables for traces, fenced code blocks with a language tag. No filler like "Great question!". No closing summaries that repeat what you said.
 - State time and space complexity with a one-line reason.
 - ${LEVELS[level] || LEVELS.beginner}
-
-## The problem
-${problem.questionFrontendId ? `#${problem.questionFrontendId} ` : ""}${problem.title}${problem.difficulty ? ` (${problem.difficulty})` : ""}
-LeetCode topic tags: ${tags}
-LeetCode's official hints:
-${lcHints}
-
-Statement:
-"""
-${problemText}
-"""`;
+${useTools ? `\n${PAST_ATTEMPTS}\n` : ""}
+${problemBlock(problem, problemText)}`;
 }
 
 export const MODES = {

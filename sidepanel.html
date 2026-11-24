@@ -96,7 +96,13 @@
         <select id="s-lang"></select>
       </label>
 
-      <p class="muted small">Privacy: on Gemini's free tier, Google may use prompts to improve its models. Only the problem text, your questions, and (when you click Review) your code are sent.</p>
+      <label class="check">
+        <input id="s-subs" type="checkbox" checked />
+        Use my past submissions
+      </label>
+      <p class="muted small">For hints, code reviews and follow-ups, the mentor may look up your recent LeetCode submissions for this problem (status, failing test, code) to personalise its answer. Turn this off to keep them private.</p>
+
+      <p class="muted small">Privacy: on Gemini's free tier, Google may use prompts to improve its models. Only the problem text, your questions, your code (when you click Review) and, if the option above is on, your past submissions are sent.</p>
       <div id="s-status" class="small"></div>
       <div class="row end">
         <button id="s-cancel" type="button">Close</button>

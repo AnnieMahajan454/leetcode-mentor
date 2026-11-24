@@ -67,6 +67,12 @@ a { color: var(--accent); }
 .msg th, .msg td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
 .msg th { background: var(--bg); }
 .msg blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--accent); color: var(--muted); }
+.tool-chip {
+  align-self: flex-start; font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  background: var(--bg); border: 1px dashed var(--border); color: var(--muted); margin-bottom: -6px;
+}
+.tool-chip.pending { border-color: var(--accent); }
+.tool-chip.warn { border-color: var(--medium); }
 .copy { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 2px 8px; opacity: .8; }
 
 .composer { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); align-items: flex-end; }
@@ -78,6 +84,7 @@ a { color: var(--accent); }
 .sheet h2 { margin: 0 0 10px; font-size: 17px; }
 .sheet label { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; font-weight: 600; font-size: 13px; }
 .sheet label > input, .sheet label > select { font-weight: 400; }
+.sheet label.check { flex-direction: row; align-items: center; gap: 8px; }
 .row { display: flex; gap: 6px; align-items: center; }
 .row select { flex: 1; font-weight: 400; }
 .row.end { justify-content: flex-end; margin-top: 12px; }
