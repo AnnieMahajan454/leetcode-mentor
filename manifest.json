@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LeetCode Mentor",
-  "version": "1.0.0",
-  "description": "Understand any LeetCode problem in plain language: hints, logic building, topics from scratch, interview traps, code and code review.",
+  "version": "1.1.0",
+  "description": "Explains LeetCode problems step by step with Gemini: hints, logic, code review, and a timed AI-assisted Practice interview mode.",
   "permissions": ["sidePanel", "storage", "scripting", "tabs"],
   "host_permissions": [
     "https://leetcode.com/*",
