@@ -1,6 +1,10 @@
 import { slugFromUrl, getActiveTab, fetchProblem, readEditor, problemHtmlToText, runTool, describeToolResult } from "./leetcode.js";
-import { streamChat, listModels, pickDefaultModel, SUBMISSION_TOOLS } from "./gemini.js";
-import { LANGS, MODES, systemPrompt, starterSnippet } from "./prompts.js";
+import { streamChat, generateJson, listModels, pickDefaultModel, SUBMISSION_TOOLS } from "./gemini.js";
+import {
+  LANGS, MODES, systemPrompt, starterSnippet,
+  practiceSystemPrompt, feedbackSystemPrompt, feedbackPrompt, SCORECARD_SCHEMA,
+} from "./prompts.js";
+import { DEFAULT_MINUTES, newSession, formatClock, remainingMs, logPrompt, parseScorecard, renderScorecard } from "./practice.js";
 
 // Opening sidepanel.html as a normal page (outside the extension) runs a demo with sample data.
 const DEMO = !(globalThis.chrome && chrome.tabs);
@@ -28,7 +32,12 @@ const state = {
   settings: { apiKey: "", model: "", level: "beginner", lang: "auto", useSubmissions: true },
   tabId: null, slug: null, problem: null, problemText: "",
   history: [], hintLevel: 1, editorLang: null, controller: null, loading: false,
+  view: "tutor", // "tutor" | "practice"
+  practice: newSession(),
 };
+
+const inPractice = () => state.view === "practice";
+const activeHistory = () => (inPractice() ? state.practice.history : state.history);
 
 // ---------------- rendering ----------------
 function renderMarkdown(el, text) {
@@ -47,6 +56,7 @@ function renderMarkdown(el, text) {
 
 function addBubble(role, text) {
   $("welcome").hidden = true;
+  $("practice-welcome").hidden = true;
   const el = document.createElement("div");
   el.className = `msg ${role}`;
   if (role === "model") renderMarkdown(el, text);
@@ -65,13 +75,24 @@ function addToolChip(bubble, text, kind) {
   return chip;
 }
 
+// Chips sit right before their answer; remove them when that answer fails.
+function removeChipsBefore(bubble) {
+  while (bubble.previousElementSibling && bubble.previousElementSibling.classList.contains("tool-chip")) {
+    bubble.previousElementSibling.remove();
+  }
+}
+
 function renderHistory() {
   $("chat").querySelectorAll(".msg, .tool-chip").forEach((m) => m.remove());
-  $("welcome").hidden = state.history.length > 0;
-  for (const m of state.history) {
+  const history = activeHistory();
+  for (const m of history) {
     const el = addBubble(m.role, m.role === "user" ? m.label || m.text : m.text);
     for (const t of m.tools || []) addToolChip(el, t.text, t.kind);
   }
+  if (inPractice()) renderFeedback();
+  const empty = !$("chat").querySelector(".msg");
+  $("welcome").hidden = inPractice() || !empty;
+  $("practice-welcome").hidden = !inPractice() || !empty;
   const last = $("chat").lastElementChild;
   if (state.history.length && last) last.scrollIntoView({ block: "start" });
 }
@@ -98,7 +119,7 @@ function updateHintButton() {
 }
 
 function setBusy(busy) {
-  document.querySelectorAll("#actions button").forEach((b) => (b.disabled = busy));
+  document.querySelectorAll("#actions button, .mode-switch button, #pr-finish").forEach((b) => (b.disabled = busy));
   $("btn-send").hidden = busy;
   $("btn-stop").hidden = !busy;
 }
@@ -160,9 +181,10 @@ async function loadProblem(tabId, slug, preset) {
   state.problem = res.q;
   state.problemText = problemHtmlToText(res.q.content);
 
-  const saved = await store.get([`chat:${slug}`, `hint:${slug}`]);
+  const saved = await store.get([`chat:${slug}`, `hint:${slug}`, `practice:${slug}`]);
   state.history = saved[`chat:${slug}`] || (DEMO ? demo.history : []);
   state.hintLevel = saved[`hint:${slug}`] || 1;
+  state.practice = saved[`practice:${slug}`] || (DEMO ? demo.practice : newSession(DEFAULT_MINUTES));
 
   const ed = DEMO ? demo.editor : await readEditor(tabId);
   state.editorLang = ed && LANGS[ed.lang] ? ed.lang : null;
@@ -171,10 +193,15 @@ async function loadProblem(tabId, slug, preset) {
   renderHistory();
   updateHintButton();
   updateLangNote();
+  renderPractice();
 }
 
 async function saveChat() {
-  await store.set({ [`chat:${state.slug}`]: state.history, [`hint:${state.slug}`]: state.hintLevel });
+  await store.set({
+    [`chat:${state.slug}`]: state.history,
+    [`hint:${state.slug}`]: state.hintLevel,
+    [`practice:${state.slug}`]: state.practice,
+  });
 }
 
 // ---------------- talking to Gemini ----------------
@@ -198,8 +225,15 @@ async function send(text, label, useTools = false) {
   if (!state.problem) return showError("Open a LeetCode problem first.");
   if (!state.settings.apiKey) { openSettings(); return; }
   if (state.controller) return;
+  const practice = inPractice();
+  if (practice && state.practice.status !== "running") {
+    return showError("Press ▶ Start to begin the practice round, then use this chat as your AI assistant.");
+  }
 
-  state.history.push({ role: "user", text, label });
+  const slug = state.slug;
+  const history = activeHistory(); // the mode switch is disabled while a reply streams
+  if (practice) logPrompt(state.practice, text, Date.now());
+  history.push({ role: "user", text, label });
   addBubble("user", label || text);
   const bubble = addBubble("model", "");
   bubble.classList.add("streaming");
@@ -225,26 +259,29 @@ async function send(text, label, useTools = false) {
     const full = await streamChat({
       apiKey: state.settings.apiKey,
       model: state.settings.model || "gemini-2.5-flash",
-      system: systemPrompt(state.problem, state.problemText, state.settings.level, withTools),
-      history: state.history.slice(-MAX_HISTORY).map(({ role, text }) => ({ role, text })),
+      system: practice
+        ? practiceSystemPrompt(state.problem, state.problemText, withTools)
+        : systemPrompt(state.problem, state.problemText, state.settings.level, withTools),
+      history: history.slice(-MAX_HISTORY).map(({ role, text }) => ({ role, text })),
       onText,
       signal: state.controller.signal,
       tools: withTools ? SUBMISSION_TOOLS : null,
       runTool: withTools ? makeToolRunner(bubble, chips) : null,
     });
     renderMarkdown(bubble, full);
-    state.history.push({ role: "model", text: full, tools: chips });
+    history.push({ role: "model", text: full, tools: chips });
     await saveChat();
   } catch (e) {
+    if (slug !== state.slug) return; // the user opened another problem: nothing to show or save here
     if (e.name === "AbortError" && latest) {
       const partial = latest + "\n\n> ⏹ *Stopped.*";
       renderMarkdown(bubble, partial);
-      state.history.push({ role: "model", text: partial, tools: chips });
+      history.push({ role: "model", text: partial, tools: chips });
       await saveChat();
     } else {
-      $("chat").querySelectorAll(".tool-chip.pending").forEach((c) => c.remove());
+      removeChipsBefore(bubble);
       bubble.remove();
-      state.history.pop(); // drop the unanswered question so a retry starts clean
+      history.pop(); // drop the unanswered question so a retry starts clean
       if (e.name !== "AbortError") showError(e.message || String(e));
     }
   } finally {
@@ -286,10 +323,141 @@ async function runMode(mode) {
   }
 }
 
+// ---------------- practice mode ----------------
+function setView(view) {
+  state.view = view;
+  store.set({ view });
+  renderPractice();
+  renderHistory();
+}
+
+function renderPractice() {
+  const p = state.practice;
+  $("tutor-controls").hidden = inPractice();
+  $("practice-controls").hidden = !inPractice();
+  document.querySelectorAll(".mode-switch button").forEach((b) => b.classList.toggle("active", b.dataset.view === state.view));
+  $("input").placeholder = inPractice()
+    ? "Ask your AI assistant… (every prompt is logged)"
+    : "Ask a follow-up… (Enter to send, Shift+Enter for new line)";
+  $("pr-minutes").value = p.minutes;
+  $("pr-minutes").disabled = p.status !== "idle";
+  $("pr-start").hidden = p.status !== "idle";
+  $("pr-finish").hidden = p.status !== "running";
+  $("pr-new").hidden = p.status !== "done";
+  updateClock();
+}
+
+// Called every second. Shows time left (time used once finished) and a one-line status.
+function updateClock() {
+  const p = state.practice;
+  const ms =
+    p.status === "idle" ? p.minutes * 60000
+    : p.status === "running" ? remainingMs(p, Date.now())
+    : p.endedAt - p.startedAt;
+  $("pr-clock").textContent = formatClock(ms);
+  $("pr-clock").classList.toggle("low", p.status === "running" && ms < 5 * 60000);
+  const prompts = `${p.log.length} prompt${p.log.length === 1 ? "" : "s"} logged`;
+  $("pr-status").textContent =
+    p.status === "idle" ? "Set a time limit and press Start. The chat becomes your AI assistant."
+    : p.status === "running" ? (ms <= 0 ? `Time's up. Finish when ready. ${prompts}.` : `${prompts}. Solve it in the LeetCode editor.`)
+    : `Finished: ${formatClock(ms)} used of ${p.minutes}:00. ${prompts}.`;
+}
+
+async function startPractice() {
+  const minutes = Math.min(120, Math.max(5, Math.round(+$("pr-minutes").value) || DEFAULT_MINUTES));
+  state.practice = { ...newSession(minutes), status: "running", startedAt: Date.now() };
+  await saveChat();
+  renderPractice();
+  renderHistory();
+  $("input").focus();
+}
+
+async function resetPractice() {
+  state.practice = newSession(state.practice.minutes);
+  await saveChat();
+  renderPractice();
+  renderHistory();
+}
+
+// Latest submission for this problem through the agent tools, so it shows the same chips.
+async function latestSubmission(runner) {
+  if (!toolsAllowed()) return null;
+  const list = await runner("get_my_submissions", { limit: 1 });
+  const last = list.ok && list.submissions[0];
+  if (!last) return null;
+  const details = await runner("get_submission_code", { submission_id: last.id });
+  return {
+    ...last,
+    details: details.ok ? details : null,
+    duringSession: Number(last.timestamp) * 1000 >= state.practice.startedAt,
+  };
+}
+
+async function finishPractice() {
+  if (!state.settings.apiKey) return openSettings();
+  if (state.controller) return;
+  const p = state.practice;
+  const slug = state.slug;
+  p.status = "done";
+  p.endedAt = Date.now();
+  renderPractice();
+
+  const bubble = addBubble("model", "Grading your session…");
+  bubble.classList.add("streaming");
+  setBusy(true);
+  state.controller = new AbortController();
+  const chips = [];
+  try {
+    const editor = DEMO ? demo.editor : await readEditor(state.tabId);
+    const submission = await latestSubmission(makeToolRunner(bubble, chips));
+    const text = await generateJson({
+      apiKey: state.settings.apiKey,
+      model: state.settings.model || "gemini-2.5-flash",
+      system: feedbackSystemPrompt(state.problem, state.problemText),
+      prompt: feedbackPrompt({ session: p, usedTime: formatClock(p.endedAt - p.startedAt), editor, submission }),
+      schema: SCORECARD_SCHEMA,
+      signal: state.controller.signal,
+    });
+    if (slug !== state.slug) return;
+    p.scorecard = parseScorecard(text);
+    p.rawFeedback = p.scorecard ? null : text || "(The reply was empty.)";
+    p.tools = chips;
+    await saveChat();
+    renderHistory();
+  } catch (e) {
+    if (slug !== state.slug) return;
+    removeChipsBefore(bubble);
+    bubble.remove();
+    Object.assign(p, { status: "running", endedAt: null }); // let the user press Finish again
+    renderPractice();
+    if (e.name !== "AbortError") showError(e.message || String(e));
+  } finally {
+    bubble.classList.remove("streaming");
+    state.controller = null;
+    setBusy(false);
+  }
+}
+
+// The scorecard (or the raw reply, if the JSON couldn't be read) goes after the practice chat.
+function renderFeedback() {
+  const p = state.practice;
+  if (!p.scorecard && !p.rawFeedback) return;
+  let el;
+  if (p.scorecard) {
+    el = renderScorecard(p.scorecard);
+    $("chat").appendChild(el);
+  } else {
+    el = addBubble("model", `> ⚠️ *The feedback didn't come back in the expected format, so here is the raw reply.*\n\n${p.rawFeedback}`);
+  }
+  for (const t of p.tools || []) addToolChip(el, t.text, t.kind);
+  el.scrollIntoView({ block: "start" });
+}
+
 // ---------------- settings ----------------
 async function loadSettings() {
-  const { settings } = await store.get(["settings"]);
+  const { settings, view } = await store.get(["settings", "view"]);
   Object.assign(state.settings, settings || {});
+  if (view === "practice") state.view = view;
 }
 
 function setModelOptions(names, selected) {
@@ -360,7 +528,12 @@ function bind() {
   });
   $("btn-stop").onclick = () => state.controller && state.controller.abort();
   $("btn-clear").onclick = async () => {
-    if (!state.slug || !confirm("Clear the chat and hints for this problem?")) return;
+    if (!state.slug) return;
+    if (inPractice()) {
+      if (confirm("Reset this practice session? The prompt log and feedback will be deleted.")) await resetPractice();
+      return;
+    }
+    if (!confirm("Clear the chat and hints for this problem?")) return;
     state.history = []; state.hintLevel = 1;
     await store.remove([`chat:${state.slug}`, `hint:${state.slug}`]);
     renderHistory(); updateHintButton();
@@ -370,6 +543,11 @@ function bind() {
   $("s-load").onclick = loadModelList;
   $("s-save").onclick = saveSettings;
   $("lang").onchange = updateLangNote;
+  document.querySelectorAll(".mode-switch button").forEach((b) => (b.onclick = () => setView(b.dataset.view)));
+  $("pr-start").onclick = startPractice;
+  $("pr-finish").onclick = finishPractice;
+  $("pr-new").onclick = resetPractice;
+  setInterval(() => inPractice() && updateClock(), 1000);
 
   if (!DEMO) {
     chrome.tabs.onActivated.addListener(() => refreshProblem());
@@ -385,6 +563,7 @@ function bind() {
   await loadSettings();
   $("lang").value = state.settings.lang;
   bind();
+  renderPractice();
   renderProblem();
   await refreshProblem();
   if (!state.settings.apiKey && !DEMO) openSettings();

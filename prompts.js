@@ -180,3 +180,104 @@ ${code}
 \`\`\``,
   },
 };
+
+// ---------- Practice mode (AI-assisted interview) ----------
+
+// The chat assistant the candidate may use during the timed round.
+export function practiceSystemPrompt(problem, problemText, useTools) {
+  return `You are the AI coding assistant in an **AI-assisted coding interview**. The candidate is allowed to use you, like a chat assistant or Copilot, while an interviewer watches HOW they use AI.
+
+## How you behave
+- Answer exactly what is asked, clearly and briefly, like a capable real assistant. Don't coach or add unrequested extras.
+- If asked for the full solution, you may give it, but never volunteer it.
+- If a question is vague, answer the most likely reading and add one line on what would make the question sharper.
+- Be correct. If the candidate's idea or code is wrong, say so and show a failing input (expected vs actual).
+- Markdown, short. Code in fenced blocks with a language tag.
+${useTools ? `\n${PAST_ATTEMPTS}\n` : ""}
+${problemBlock(problem, problemText)}`;
+}
+
+// The interviewer who grades the finished round.
+export function feedbackSystemPrompt(problem, problemText) {
+  return `You are a senior engineer grading an **AI-assisted coding interview**. The candidate could use an AI assistant. Judge the result AND how they used the AI. Be honest and calibrated; don't inflate scores.
+
+## Scoring guide (every score is 0-10)
+- **problemSolving**: did they understand the problem, pick a sound approach and reason about complexity and edge cases themselves?
+- **aiUsage**: high for specific, checkable prompts ("what edge case does this loop miss?", "is O(n log n) fast enough for n = 10^5?"), for verifying the AI's answers and for keeping the core reasoning their own. Low for "give me the solution", pasting the whole problem, or accepting code without checking it. No prompts at all is fine: say so and score on the other evidence.
+- **codeQuality**: readability, naming, structure, idiomatic use of the language.
+- **correctness.verdict**: use the latest LeetCode submission result when it was made during the session; otherwise trace the final code yourself.
+- **goodPrompts / weakPrompts**: quote the candidate's prompts word for word, at most 3 each. Empty lists are fine.
+- **improvements**: exactly 3 concrete, actionable tips for next time.
+- **overallScore** and **interviewerVerdict** must agree with the parts.
+
+${problemBlock(problem, problemText)}`;
+}
+
+function describeSubmission(sub) {
+  if (!sub) return "Not available (not signed in, no submissions, or the setting is off).";
+  const d = sub.details || {};
+  const lines = [
+    `Status: ${d.statusDisplay || sub.statusDisplay} (${sub.lang})`,
+    `Submitted: ${sub.submittedAt}${sub.duringSession ? " (during this session)" : " (BEFORE this session started)"}`,
+  ];
+  if (d.runtimeDisplay) lines.push(`Runtime: ${d.runtimeDisplay}, memory: ${d.memoryDisplay}`);
+  if (d.lastTestcase) lines.push(`Failing input: ${d.lastTestcase}`);
+  if (d.expectedOutput) lines.push(`Expected: ${d.expectedOutput}`);
+  if (d.codeOutput) lines.push(`Their output: ${d.codeOutput}`);
+  if (d.runtimeError || d.compileError) lines.push(`Error: ${d.runtimeError || d.compileError}`);
+  return lines.join("\n");
+}
+
+export function feedbackPrompt({ session, usedTime, editor, submission }) {
+  const log = session.log.length
+    ? session.log.map((l) => `[${l.elapsed}] ${l.text}`).join("\n")
+    : "None. The candidate didn't use the AI assistant.";
+  const code = editor && editor.code.trim()
+    ? `\`\`\`${editor.lang}\n${editor.code}\n\`\`\``
+    : "The editor was empty or couldn't be read.";
+  return `Grade this session and return the scorecard JSON.
+
+## Session
+Time limit: ${session.minutes} min. Time used: ${usedTime}.
+
+## Prompts the candidate sent to the AI assistant ([mm:ss] since start)
+${log}
+
+## Final code in the editor
+${code}
+
+## Latest LeetCode submission for this problem
+${describeSubmission(submission)}`;
+}
+
+export const VERDICTS = ["Strong hire", "Hire", "Lean no", "No"];
+export const CORRECTNESS = ["Correct", "Partially correct", "Incorrect", "Not attempted"];
+
+const SCORE = { type: "INTEGER", minimum: 0, maximum: 10 };
+const TEXT = { type: "STRING" };
+const TEXT_LIST = { type: "ARRAY", items: TEXT };
+const scored = { type: "OBJECT", properties: { score: SCORE, comment: TEXT }, required: ["score", "comment"] };
+
+// Gemini responseSchema: the model's reply must be JSON in exactly this shape.
+export const SCORECARD_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    overallScore: SCORE,
+    problemSolving: scored,
+    aiUsage: {
+      type: "OBJECT",
+      properties: { score: SCORE, comment: TEXT, goodPrompts: TEXT_LIST, weakPrompts: TEXT_LIST },
+      required: ["score", "comment", "goodPrompts", "weakPrompts"],
+    },
+    codeQuality: scored,
+    correctness: {
+      type: "OBJECT",
+      properties: { verdict: { type: "STRING", format: "enum", enum: CORRECTNESS }, comment: TEXT },
+      required: ["verdict", "comment"],
+    },
+    improvements: { ...TEXT_LIST, minItems: 3, maxItems: 3 },
+    interviewerVerdict: { type: "STRING", format: "enum", enum: VERDICTS },
+  },
+  required: ["overallScore", "problemSolving", "aiUsage", "codeQuality", "correctness", "improvements", "interviewerVerdict"],
+  propertyOrdering: ["problemSolving", "aiUsage", "codeQuality", "correctness", "improvements", "overallScore", "interviewerVerdict"],
+};

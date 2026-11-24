@@ -89,3 +89,36 @@ a { color: var(--accent); }
 .row select { flex: 1; font-weight: 400; }
 .row.end { justify-content: flex-end; margin-top: 12px; }
 #s-status.ok { color: var(--easy); } #s-status.err { color: var(--danger); }
+
+/* ---------- mode switch ---------- */
+.mode-switch { display: flex; gap: 4px; padding: 8px 12px 0; }
+.mode-switch button { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 5px 8px; line-height: 1.25; }
+.mode-switch button span { font-size: 11px; opacity: .75; }
+.mode-switch button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+
+/* ---------- practice mode ---------- */
+.practice { padding: 4px 12px 8px; border-bottom: 1px solid var(--border); }
+.practice-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.practice-bar label { display: flex; align-items: center; gap: 4px; }
+.practice-bar input { width: 58px; }
+.clock { font: 700 22px/1 ui-monospace, Consolas, monospace; min-width: 76px; }
+.clock.low { color: var(--hard); }
+#pr-status { margin-top: 4px; }
+
+/* ---------- scorecard ---------- */
+.scorecard { display: flex; flex-direction: column; gap: 10px; }
+.sc-head { display: flex; align-items: center; gap: 10px; }
+.sc-title { font-weight: 700; flex: 1; }
+.sc-overall b { font-size: 24px; }
+.sc-badge { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); }
+.sc-badge.strong-hire, .sc-badge.hire, .sc-badge.correct { color: var(--easy); border-color: var(--easy); }
+.sc-badge.lean-no, .sc-badge.partially-correct { color: var(--medium); border-color: var(--medium); }
+.sc-badge.no, .sc-badge.incorrect { color: var(--hard); border-color: var(--hard); }
+.sc-row-head { display: flex; justify-content: space-between; align-items: center; }
+.sc-label { font-weight: 600; font-size: 13px; }
+.sc-score { font-size: 12px; color: var(--muted); }
+.sc-bar { height: 6px; border-radius: 999px; background: var(--border); margin-top: 4px; overflow: hidden; }
+.sc-fill { height: 100%; border-radius: 999px; }
+.sc-fill.good { background: var(--easy); } .sc-fill.mid { background: var(--medium); } .sc-fill.low { background: var(--hard); }
+.sc-comment { margin: 4px 0 0; font-size: 13px; }
+.sc-list ul, .sc-list ol { margin: 4px 0 0; font-size: 13px; }

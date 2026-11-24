@@ -18,6 +18,12 @@
     </div>
   </header>
 
+  <!-- Mode switch -->
+  <nav class="mode-switch" aria-label="Mode">
+    <button id="view-tutor" data-view="tutor" class="active"><b>🎓 Tutor</b><span>step-by-step help</span></button>
+    <button id="view-practice" data-view="practice"><b>⏱ Practice</b><span>AI-assisted interview</span></button>
+  </nav>
+
   <!-- Problem card -->
   <section id="problem" class="card">
     <div id="problem-empty" class="muted">
@@ -29,7 +35,8 @@
     </div>
   </section>
 
-  <!-- Actions -->
+  <!-- Tutor mode controls -->
+  <div id="tutor-controls">
   <section id="actions" class="actions">
     <button data-mode="understand">🧠 Understand</button>
     <button data-mode="hint" id="btn-hint">💡 Hint 1</button>
@@ -44,6 +51,19 @@
     </label>
     <span id="lang-note" class="muted small"></span>
   </div>
+  </div>
+
+  <!-- Practice mode controls -->
+  <section id="practice-controls" class="practice" hidden>
+    <div class="practice-bar">
+      <span id="pr-clock" class="clock">30:00</span>
+      <label class="small muted">Minutes <input id="pr-minutes" type="number" min="5" max="120" step="5" value="30" /></label>
+      <button id="pr-start" class="primary">▶ Start</button>
+      <button id="pr-finish" class="primary" hidden>🏁 Finish &amp; get feedback</button>
+      <button id="pr-new" hidden>↺ New session</button>
+    </div>
+    <div id="pr-status" class="small muted"></div>
+  </section>
 
   <!-- Chat -->
   <main id="chat" class="chat">
@@ -58,6 +78,16 @@
         <li><b>Review my code</b>: reads your editor, finds bugs and shows a failing input.</li>
       </ol>
       <p class="muted">Ask anything below, e.g. <i>"why do we cast to long here?"</i></p>
+    </div>
+    <div id="practice-welcome" class="welcome" hidden>
+      <h3>AI-assisted interview</h3>
+      <ol>
+        <li>Set a time limit and press <b>Start</b>.</li>
+        <li>Solve the problem in the LeetCode editor. The chat below is your AI assistant, like in an AI-allowed coding round.</li>
+        <li>Every prompt you send is logged with its time.</li>
+        <li>Press <b>Finish &amp; get feedback</b> for a scorecard: problem solving, <i>how well you used the AI</i>, code quality, correctness and a hire verdict.</li>
+      </ol>
+      <p class="muted">Tip: specific questions ("what edge case does my loop miss?") score better than "give me the answer".</p>
     </div>
   </main>
 

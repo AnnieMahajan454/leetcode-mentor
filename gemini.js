@@ -170,3 +170,25 @@ function finishReply(turn, onText) {
   }
   return full;
 }
+
+/**
+ * Structured output: one non-streaming request that must return JSON matching `schema`.
+ * Returns the raw JSON text; the caller parses and validates it.
+ */
+export async function generateJson({ apiKey, model, system, prompt, schema, signal }) {
+  const res = await callModel({
+    apiKey,
+    model,
+    method: "generateContent",
+    signal,
+    body: {
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 4096, responseMimeType: "application/json", responseSchema: schema },
+    },
+  });
+  const json = await res.json();
+  const cand = json.candidates && json.candidates[0];
+  const parts = (cand && cand.content && cand.content.parts) || [];
+  return parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
+}
